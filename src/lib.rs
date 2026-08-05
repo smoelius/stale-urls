@@ -1,9 +1,9 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Error, Result, anyhow, bail};
 use percent_encoding::percent_decode_str;
 use regex::Regex;
 use std::{
     collections::BTreeMap,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fmt::{self, Write as _},
     fs,
     path::{Path, PathBuf},
@@ -93,13 +93,13 @@ pub fn scan_with_counted(
     let total = paths.len();
 
     for (index, relative_path) in paths.into_iter().enumerate() {
-        let path = root.join(&relative_path);
+        let path_buf = root.join(&relative_path);
         on_file(&relative_path, index + 1, total);
 
-        let bytes = match read_tracked_path(&path) {
+        let bytes = match read_tracked_path(&path_buf) {
             Ok(bytes) => bytes,
             Err(error) => {
-                issues.push(format!("{}: {error}", path.display()));
+                issues.push(format!("{}: {error}", path_buf.display()));
                 continue;
             }
         };
@@ -117,7 +117,7 @@ pub fn scan_with_counted(
                 .filter(|byte| **byte == b'\n')
                 .count();
             found.entry(url).or_default().push(Occurrence {
-                file: path.clone(),
+                file: path_buf.clone(),
                 line,
             });
         }
@@ -162,7 +162,7 @@ fn path_from_git(path: &[u8]) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStringExt;
-        Ok(std::ffi::OsString::from_vec(path.to_vec()).into())
+        Ok(OsString::from_vec(path.to_vec()).into())
     }
     #[cfg(not(unix))]
     {
@@ -579,13 +579,13 @@ struct Repository {
 impl Repository {
     fn open_or_update(cache: &Path, url: &SourceUrl) -> Result<Self> {
         let owner_directory = cache.join(&url.owner);
-        let path = owner_directory.join(&url.repo);
+        let path_buf = owner_directory.join(&url.repo);
         fs::create_dir_all(&owner_directory)
             .with_context(|| format!("could not create {}", owner_directory.display()))?;
 
-        if path.exists() {
-            if !path.join(".git").is_dir() {
-                bail!("cache path {} is not a Git repository", path.display());
+        if path_buf.exists() {
+            if !path_buf.join(".git").is_dir() {
+                bail!("cache path {} is not a Git repository", path_buf.display());
             }
         } else {
             let remote = format!("https://github.com/{}/{}.git", url.owner, url.repo);
@@ -593,15 +593,15 @@ impl Repository {
                 Command::new("git")
                     .args(["clone", "--depth", "1", "--no-tags", "--quiet"])
                     .arg(&remote)
-                    .arg(&path),
+                    .arg(&path_buf),
                 "shallow-clone repository",
             )?;
         }
 
-        let default_branch = remote_default_branch(&path)?;
+        let default_branch = remote_default_branch(&path_buf)?;
         let default_ref = format!("refs/remotes/origin/{default_branch}");
         git_ok(
-            &path,
+            &path_buf,
             [
                 "fetch",
                 "--quiet",
@@ -612,23 +612,23 @@ impl Repository {
             "update cached default branch",
         )?;
 
-        let current_branch = git_text(&path, ["branch", "--show-current"], "read branch")?;
+        let current_branch = git_text(&path_buf, ["branch", "--show-current"], "read branch")?;
         if current_branch.trim() == default_branch {
             git_ok(
-                &path,
+                &path_buf,
                 ["merge", "--quiet", "--ff-only", &default_ref],
                 "fast-forward cached default branch",
             )?;
         } else {
             git_ok(
-                &path,
+                &path_buf,
                 ["checkout", "--quiet", "-B", &default_branch, &default_ref],
                 "check out the repository's default branch",
             )?;
         }
 
         Ok(Self {
-            path,
+            path: path_buf,
             default_branch,
             default_ref,
         })
@@ -931,7 +931,7 @@ fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
     }
 }
 
-fn git_failure(operation: &str, output: &Output) -> anyhow::Error {
+fn git_failure(operation: &str, output: &Output) -> Error {
     let mut message = format!("could not {operation}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.trim();
@@ -944,6 +944,8 @@ fn git_failure(operation: &str, output: &Output) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SHA1_HEX_LENGTH: usize = 40;
 
     fn test_git(repository: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
@@ -1023,6 +1025,8 @@ mod tests {
         assert!(extract_lines(b"one\n", 2, 2).is_err());
     }
 
+    // Each filesystem mutation is confined to this test's temporary directory.
+    #[cfg_attr(dylint_lib = "general", allow(non_thread_safe_call_in_test))]
     #[test]
     fn scan_includes_only_tracked_files_and_records_all_occurrences() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1042,7 +1046,7 @@ mod tests {
         );
 
         let mut scanned = Vec::new();
-        let result = scan_with_counted(temporary.path(), |path, index, total| {
+        let result = scan_with_counted(&temporary, |path, index, total| {
             scanned.push((path.to_owned(), index, total));
         })
         .unwrap();
@@ -1055,6 +1059,8 @@ mod tests {
         assert!(!scanned.iter().any(|(path, _, _)| path == "untracked.txt"));
     }
 
+    // Each filesystem mutation is confined to this test's temporary directory.
+    #[cfg_attr(dylint_lib = "general", allow(non_thread_safe_call_in_test))]
     #[cfg(unix)]
     #[test]
     fn scan_does_not_follow_tracked_symlinks() {
@@ -1072,12 +1078,14 @@ mod tests {
         test_git(temporary.path(), &["add", "--", "tracked-link"]);
 
         let mut scanned = Vec::new();
-        let result = scan_with(temporary.path(), |path| scanned.push(path.to_owned())).unwrap();
+        let result = scan_with(&temporary, |path| scanned.push(path.to_owned())).unwrap();
         assert!(result.issues.is_empty());
         assert!(result.urls.is_empty());
         assert_eq!(scanned, [PathBuf::from("tracked-link")]);
     }
 
+    // Each filesystem mutation is confined to this test's temporary directory.
+    #[cfg_attr(dylint_lib = "general", allow(non_thread_safe_call_in_test))]
     #[test]
     fn local_check_classifies_without_a_remote() {
         let (temporary, repository) = test_repository();
@@ -1113,6 +1121,8 @@ mod tests {
         );
     }
 
+    // Each filesystem mutation is confined to this test's temporary directory.
+    #[cfg_attr(dylint_lib = "general", allow(non_thread_safe_call_in_test))]
     #[test]
     fn checking_runs_in_distinct_ordered_phases() {
         let (temporary, _) = test_repository();
@@ -1334,7 +1344,7 @@ mod tests {
                     .to_owned(),
                     owner: "o".to_owned(),
                     repo: "r".to_owned(),
-                    commit: "0".repeat(40),
+                    commit: "0".repeat(SHA1_HEX_LENGTH),
                     path: "f".to_owned(),
                     start: 1,
                     end: 1,
@@ -1345,12 +1355,12 @@ mod tests {
                 }],
             },
             change_commit: CommitInfo {
-                hash: "1".repeat(40),
+                hash: "1".repeat(SHA1_HEX_LENGTH),
                 date: "2026-01-01T00:00:00Z".to_owned(),
                 title: "change".to_owned(),
             },
             merge_commit: CommitInfo {
-                hash: "2".repeat(40),
+                hash: "2".repeat(SHA1_HEX_LENGTH),
                 date: "2026-01-02T00:00:00Z".to_owned(),
                 title: "merge".to_owned(),
             },
@@ -1366,7 +1376,7 @@ mod tests {
         assert!(colored.contains("\x1b[1;33mChange commit:\x1b[0m"));
         assert!(colored.contains("\x1b[1;35mMerge commit:\x1b[0m"));
         assert!(colored.contains("README.md:3"));
-        assert!(colored.contains(&format!("\x1b[0m{}", "1".repeat(40))));
-        assert!(!colored.contains(&format!("\x1b[36m{}", "1".repeat(40))));
+        assert!(colored.contains(&format!("\x1b[0m{}", "1".repeat(SHA1_HEX_LENGTH))));
+        assert!(!colored.contains(&format!("\x1b[36m{}", "1".repeat(SHA1_HEX_LENGTH))));
     }
 }

@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use stale_urls::{CheckOutcome, CheckProgress, check_urls_with_phases, scan, scan_with_counted};
+use stale_urls::{
+    CheckOutcome, CheckProgress, FoundUrl, ScanResult, check_urls_with_phases, scan,
+    scan_with_counted,
+};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use terminal_size::{Width, terminal_size_of};
@@ -10,6 +13,7 @@ const DIM: &str = "\x1b[2m";
 const RED: &str = "\x1b[31m";
 const GREEN: &str = "\x1b[32m";
 const CYAN: &str = "\x1b[36m";
+const DEFAULT_TERMINAL_WIDTH: usize = 80;
 
 fn main() -> Result<ExitCode> {
     let stdout_color = color_enabled(io::stdout().is_terminal());
@@ -77,26 +81,33 @@ fn main() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn scan_current_repository() -> Result<stale_urls::ScanResult> {
-    let mut stderr = io::stderr().lock();
-    if !stderr.is_terminal() {
+fn scan_current_repository() -> Result<ScanResult> {
+    let mut stderr_lock = io::stderr().lock();
+    if !stderr_lock.is_terminal() {
         return scan(".").context("could not scan the current repository");
     }
 
     let color = color_enabled(true);
     let result = scan_with_counted(".", |path, index, total| {
-        let path = path.to_string_lossy();
-        let path: String = path.chars().flat_map(char::escape_debug).collect();
+        let path_text = path.to_string_lossy();
+        let path_text: String = path_text.chars().flat_map(char::escape_debug).collect();
         let suffix = format!(" ({index}/{total})");
-        let _ = write_progress(&mut stderr, "Scanning: ", &path, &suffix, None, color);
+        let _ = write_progress(
+            &mut stderr_lock,
+            "Scanning: ",
+            &path_text,
+            &suffix,
+            None,
+            color,
+        );
     });
-    clear_progress(&mut stderr)?;
+    clear_progress(&mut stderr_lock)?;
     result.context("could not scan the current repository")
 }
 
-fn check_urls_with_progress(urls: Vec<stale_urls::FoundUrl>) -> Result<Vec<CheckOutcome>> {
-    let mut stderr = io::stderr().lock();
-    let interactive = stderr.is_terminal();
+fn check_urls_with_progress(urls: Vec<FoundUrl>) -> Result<Vec<CheckOutcome>> {
+    let mut stderr_lock = io::stderr().lock();
+    let interactive = stderr_lock.is_terminal();
     let color = color_enabled(interactive);
     let outcomes = check_urls_with_phases(urls, |progress| {
         let (label, value, index, total, value_style) = match progress {
@@ -114,7 +125,7 @@ fn check_urls_with_progress(urls: Vec<stale_urls::FoundUrl>) -> Result<Vec<Check
             ),
             CheckProgress::InvestigationCount { total } => {
                 if interactive {
-                    let _ = clear_progress(&mut stderr);
+                    let _ = clear_progress(&mut stderr_lock);
                 }
                 println!("{total} URL(s) require investigation.");
                 return;
@@ -129,11 +140,11 @@ fn check_urls_with_progress(urls: Vec<stale_urls::FoundUrl>) -> Result<Vec<Check
         };
         let suffix = format!(" ({index}/{total})");
         if interactive {
-            let _ = write_progress(&mut stderr, label, &value, &suffix, value_style, color);
+            let _ = write_progress(&mut stderr_lock, label, &value, &suffix, value_style, color);
         }
     });
     if interactive {
-        clear_progress(&mut stderr)?;
+        clear_progress(&mut stderr_lock)?;
     }
     Ok(outcomes)
 }
@@ -177,7 +188,7 @@ fn terminal_width() -> usize {
                 .ok()
                 .and_then(|value| value.parse().ok())
         })
-        .unwrap_or(80)
+        .unwrap_or(DEFAULT_TERMINAL_WIDTH)
 }
 
 fn color_enabled(is_terminal: bool) -> bool {
