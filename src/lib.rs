@@ -1150,6 +1150,11 @@ mod tests {
             "git clone failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(
+            cached_repository.join(".git").is_dir(),
+            "{} is not seeded; `check_urls_in_cache` would fall back to a real GitHub clone",
+            cached_repository.display()
+        );
 
         let found = |line| FoundUrl {
             url: SourceUrl {
