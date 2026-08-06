@@ -143,6 +143,7 @@ fn read_tracked_path(path: &Path) -> std::io::Result<Vec<u8>> {
         use std::os::unix::ffi::OsStrExt;
         Ok(target.as_os_str().as_bytes().to_vec())
     }
+    // smoelius: This code is currently unused as we rely on `xdg`, a Unix-specific dependency.
     #[cfg(not(unix))]
     {
         target
@@ -164,6 +165,7 @@ fn path_from_git(path: &[u8]) -> Result<PathBuf> {
         use std::os::unix::ffi::OsStringExt;
         Ok(OsString::from_vec(path.to_vec()).into())
     }
+    // smoelius: This code is currently unused as we rely on `xdg`, a Unix-specific dependency.
     #[cfg(not(unix))]
     {
         Ok(String::from_utf8(path.to_vec())
