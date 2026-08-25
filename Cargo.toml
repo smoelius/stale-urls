@@ -1,7 +1,10 @@
 [package]
 name = "stale-urls"
 version = "0.1.0"
+description = "Check GitHub source links for stale line references"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/smoelius/stale-urls"
 
 [dependencies]
 anyhow = "1.0"
