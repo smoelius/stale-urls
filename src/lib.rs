@@ -60,7 +60,7 @@ pub struct FoundUrl {
 #[derive(Debug, Default)]
 pub struct ScanResult {
     pub urls: Vec<FoundUrl>,
-    pub issues: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 pub fn scan(root: impl AsRef<Path>) -> Result<ScanResult> {
@@ -77,7 +77,7 @@ pub fn scan_with_counted(
 ) -> Result<ScanResult> {
     let root = root.as_ref();
     let mut found: BTreeMap<SourceUrl, Vec<Occurrence>> = BTreeMap::new();
-    let mut issues = Vec::new();
+    let mut errors = Vec::new();
 
     let output = git_output(root, ["ls-files", "-z"])?;
     if !output.status.success() {
@@ -99,7 +99,7 @@ pub fn scan_with_counted(
         let bytes = match read_tracked_path(&path_buf) {
             Ok(bytes) => bytes,
             Err(error) => {
-                issues.push(format!("{}: {error}", path_buf.display()));
+                errors.push(format!("{}: {error}", path_buf.display()));
                 continue;
             }
         };
@@ -128,7 +128,7 @@ pub fn scan_with_counted(
             .into_iter()
             .map(|(url, occurrences)| FoundUrl { url, occurrences })
             .collect(),
-        issues,
+        errors,
     })
 }
 
@@ -1052,7 +1052,7 @@ mod tests {
             scanned.push((path.to_owned(), index, total));
         })
         .unwrap();
-        assert!(result.issues.is_empty());
+        assert!(result.errors.is_empty());
         assert_eq!(result.urls.len(), 1);
         assert_eq!(result.urls[0].occurrences.len(), 2);
         assert_eq!(result.urls[0].occurrences[0].line, 2);
@@ -1081,7 +1081,7 @@ mod tests {
 
         let mut scanned = Vec::new();
         let result = scan_with(&temporary, |path| scanned.push(path.to_owned())).unwrap();
-        assert!(result.issues.is_empty());
+        assert!(result.errors.is_empty());
         assert!(result.urls.is_empty());
         assert_eq!(scanned, [PathBuf::from("tracked-link")]);
     }

@@ -22,11 +22,11 @@ fn main() -> Result<ExitCode> {
     let urls_found: usize = scan.urls.iter().map(|found| found.occurrences.len()).sum();
     let unique_urls = scan.urls.len();
     println!("Found {urls_found} GitHub URL(s), {unique_urls} unique.");
-    let scan_errors = scan.issues.len();
-    let mut check_errors = 0;
+    let file_errors = scan.errors.len();
+    let mut url_errors = 0;
 
-    for issue in &scan.issues {
-        eprintln!("{} {issue}", styled("error:", BOLD_RED, stderr_color));
+    for error in &scan.errors {
+        eprintln!("{} {error}", styled("error:", BOLD_RED, stderr_color));
     }
 
     let outcomes = check_urls_with_progress(scan.urls)?;
@@ -45,7 +45,7 @@ fn main() -> Result<ExitCode> {
                 }
             }
             CheckOutcome::Error { found, message } => {
-                check_errors += 1;
+                url_errors += 1;
                 eprintln!(
                     "{} {}",
                     styled("error:", BOLD_RED, stderr_color),
@@ -64,17 +64,17 @@ fn main() -> Result<ExitCode> {
         }
     }
 
-    let checked = current + stale + check_errors;
+    assert_eq!(unique_urls, current + stale + url_errors);
     println!(
         "Checked {} unique URL(s): {}, {}, {}; {}.",
-        checked,
+        unique_urls,
         styled_count_with_label(current, "current", GREEN, stdout_color),
         styled_count_with_label(stale, "stale", RED, stdout_color),
-        styled_count_with_label(check_errors, "error(s)", RED, stdout_color),
-        styled_count_with_label(scan_errors, "scan error(s)", RED, stdout_color),
+        styled_count_with_label(url_errors, "URL error(s)", RED, stdout_color),
+        styled_count_with_label(file_errors, "file error(s)", RED, stdout_color),
     );
 
-    if stale != 0 || check_errors != 0 || scan_errors != 0 {
+    if stale != 0 || url_errors != 0 || file_errors != 0 {
         return Ok(ExitCode::FAILURE);
     }
 
