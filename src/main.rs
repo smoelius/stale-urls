@@ -1,18 +1,12 @@
 use anyhow::{Context, Result};
 use stale_urls::{
-    CheckOutcome, CheckProgress, FoundUrl, ScanResult, check_urls_with_phases, scan,
-    scan_with_counted,
+    BOLD_RED, CYAN, CheckOutcome, CheckProgress, DIM, FoundUrl, GREEN, RED, RESET, ScanResult,
+    check_urls_with_phases, scan, scan_with_counted,
 };
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use terminal_size::{Width, terminal_size_of};
 
-const RESET: &str = "\x1b[0m";
-const BOLD_RED: &str = "\x1b[1;31m";
-const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m";
-const GREEN: &str = "\x1b[32m";
-const CYAN: &str = "\x1b[36m";
 const DEFAULT_TERMINAL_WIDTH: usize = 80;
 
 fn main() -> Result<ExitCode> {
