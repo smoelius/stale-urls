@@ -11,6 +11,15 @@ use std::{
     sync::LazyLock,
 };
 
+pub const RESET: &str = "\x1b[0m";
+pub const DIM: &str = "\x1b[2m";
+pub const RED: &str = "\x1b[31m";
+pub const BOLD_RED: &str = "\x1b[1;31m";
+pub const GREEN: &str = "\x1b[32m";
+pub const BOLD_YELLOW: &str = "\x1b[1;33m";
+pub const BOLD_MAGENTA: &str = "\x1b[1;35m";
+pub const CYAN: &str = "\x1b[36m";
+
 static URL_CANDIDATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"https://github\.com/[^\s<>"'`]+"#).expect("URL candidate regex must compile")
 });
@@ -248,11 +257,11 @@ impl fmt::Display for ColoredStaleReport<'_> {
 }
 
 fn write_report(f: &mut fmt::Formatter<'_>, report: &StaleReport, color: bool) -> fmt::Result {
-    write_styled(f, color, "\x1b[1;31m", format_args!("Stale URL:"))?;
+    write_styled(f, color, BOLD_RED, format_args!("Stale URL:"))?;
     write!(f, " ")?;
-    write_styled(f, color, "\x1b[36m", format_args!("{}", report.found.url))?;
+    write_styled(f, color, CYAN, format_args!("{}", report.found.url))?;
     writeln!(f)?;
-    write_styled(f, color, "\x1b[2m", format_args!("Found at:"))?;
+    write_styled(f, color, DIM, format_args!("Found at:"))?;
     writeln!(f)?;
     for occurrence in &report.found.occurrences {
         writeln!(f, "  {}:{}", occurrence.file.display(), occurrence.line)?;
@@ -260,7 +269,7 @@ fn write_report(f: &mut fmt::Formatter<'_>, report: &StaleReport, color: bool) -
     write_commit(
         f,
         "Change commit",
-        "\x1b[1;33m",
+        BOLD_YELLOW,
         &report.change_commit,
         &report.found.url,
         color,
@@ -269,7 +278,7 @@ fn write_report(f: &mut fmt::Formatter<'_>, report: &StaleReport, color: bool) -
         write_commit(
             f,
             "Merge commit",
-            "\x1b[1;35m",
+            BOLD_MAGENTA,
             &report.merge_commit,
             &report.found.url,
             color,
@@ -285,14 +294,14 @@ fn write_styled(
     value: fmt::Arguments<'_>,
 ) -> fmt::Result {
     if color {
-        write!(f, "{style}{value}\x1b[0m")
+        write!(f, "{style}{value}{RESET}")
     } else {
         f.write_fmt(value)
     }
 }
 
 fn write_field(f: &mut fmt::Formatter<'_>, label: &str, color: bool) -> fmt::Result {
-    write_styled(f, color, "\x1b[2m", format_args!("  {label}"))
+    write_styled(f, color, DIM, format_args!("  {label}"))
 }
 
 fn write_commit(
@@ -315,7 +324,7 @@ fn write_commit(
     write_styled(
         f,
         color,
-        "\x1b[36m",
+        CYAN,
         format_args!(
             "https://github.com/{}/{}/commit/{}",
             url.owner, url.repo, commit.hash
