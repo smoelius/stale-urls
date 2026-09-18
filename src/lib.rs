@@ -119,10 +119,10 @@ pub fn scan_with_counted(
     let mut found: BTreeMap<SourceUrl, Vec<Occurrence>> = BTreeMap::new();
     let mut errors = Vec::new();
 
-    let output = git_output_unchecked(root, ["ls-files", "-z"])?;
-    if !output.status.success() {
-        return Err(git_failure("list tracked files", &output));
-    }
+    let output = git_output(
+        git_output_unchecked(root, ["ls-files", "-z"])?,
+        "list tracked files",
+    )?;
 
     let paths: Vec<PathBuf> = output
         .stdout
@@ -780,11 +780,10 @@ impl Repository {
     }
 
     fn renamed_path(&self, old: &str, new: &str, path: &str, forward: bool) -> Result<String> {
-        let output =
-            git_output_unchecked(&self.path, ["diff", "--name-status", "-z", "-M", old, new])?;
-        if !output.status.success() {
-            return Err(git_failure("detect file renames", &output));
-        }
+        let output = git_output(
+            git_output_unchecked(&self.path, ["diff", "--name-status", "-z", "-M", old, new])?,
+            "detect file renames",
+        )?;
         let fields: Vec<&[u8]> = output.stdout.split(|byte| *byte == 0).collect();
         let mut index = 0;
         while index < fields.len() && !fields[index].is_empty() {
@@ -870,11 +869,11 @@ impl Repository {
 }
 
 fn remote_default_branch(repository: &Path) -> Result<String> {
-    let output = git_output_unchecked(repository, ["ls-remote", "--symref", "origin", "HEAD"])?;
-    if !output.status.success() {
-        return Err(git_failure("determine remote default branch", &output));
-    }
-    let text = String::from_utf8(output.stdout).context("Git emitted non-UTF-8 output")?;
+    let text = git_text(
+        repository,
+        ["ls-remote", "--symref", "origin", "HEAD"],
+        "determine remote default branch",
+    )?;
     text.lines()
         .find_map(|line| {
             line.strip_prefix("ref: refs/heads/")
@@ -930,20 +929,13 @@ fn git_lines<const N: usize>(
 }
 
 fn git_text<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<String> {
-    let output = git_output_unchecked(repository, args)?;
-    if !output.status.success() {
-        return Err(git_failure(operation, &output));
-    }
+    let output = git_output(git_output_unchecked(repository, args)?, operation)?;
     String::from_utf8(output.stdout).context("Git emitted non-UTF-8 output")
 }
 
 fn git_ok<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<()> {
-    let output = git_output_unchecked(repository, args)?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(git_failure(operation, &output))
-    }
+    git_output(git_output_unchecked(repository, args)?, operation)?;
+    Ok(())
 }
 
 fn git_output_unchecked<I, S>(repository: &Path, args: I) -> Result<Output>
@@ -963,8 +955,13 @@ fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
     let output = command
         .output()
         .with_context(|| format!("could not {operation}"))?;
+    git_output(output, operation)?;
+    Ok(())
+}
+
+fn git_output(output: Output, operation: &str) -> Result<Output> {
     if output.status.success() {
-        Ok(())
+        Ok(output)
     } else {
         Err(git_failure(operation, &output))
     }
