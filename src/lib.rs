@@ -20,6 +20,37 @@ pub const BOLD_YELLOW: &str = "\x1b[1;33m";
 pub const BOLD_MAGENTA: &str = "\x1b[1;35m";
 pub const CYAN: &str = "\x1b[36m";
 
+/// A value with optional ANSI styling.
+pub struct Styled<'a, T> {
+    value: T,
+    style: &'a str,
+    color: bool,
+}
+
+/// Apply an ANSI style when color is enabled.
+pub fn styled<T: fmt::Display>(value: T, style: &str, color: bool) -> Styled<'_, T> {
+    Styled {
+        value,
+        style,
+        color,
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for Styled<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            value,
+            style,
+            color,
+        } = self;
+        if *color {
+            write!(f, "{style}{value}{RESET}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
 static URL_CANDIDATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"https://github\.com/[^\s<>"'`]+"#).expect("URL candidate regex must compile")
 });
@@ -293,11 +324,7 @@ fn write_styled(
     style: &str,
     value: fmt::Arguments<'_>,
 ) -> fmt::Result {
-    if color {
-        write!(f, "{style}{value}{RESET}")
-    } else {
-        f.write_fmt(value)
-    }
+    write!(f, "{}", styled(value, style, color))
 }
 
 fn write_field(f: &mut fmt::Formatter<'_>, label: &str, color: bool) -> fmt::Result {

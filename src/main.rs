@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use stale_urls::{
-    BOLD_RED, CYAN, CheckOutcome, CheckProgress, DIM, FoundUrl, GREEN, RED, RESET, ScanResult,
-    check_urls_with_phases, scan, scan_with_counted,
+    BOLD_RED, CYAN, CheckOutcome, CheckProgress, DIM, FoundUrl, GREEN, RED, ScanResult, Styled,
+    check_urls_with_phases, scan, scan_with_counted, styled,
 };
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
@@ -154,17 +154,16 @@ fn write_progress(
     let available = terminal_width().saturating_sub(label.len() + suffix.chars().count() + 1);
     let value = truncate(value, available);
     write!(output, "\r\x1b[2K")?;
-    if color {
-        write!(output, "{DIM}{label}{RESET}")?;
-        if let Some(style) = value_style {
-            write!(output, "{style}{value}{RESET}")?;
-        } else {
-            write!(output, "{value}")?;
-        }
-        write!(output, "{suffix}")?;
-    } else {
-        write!(output, "{label}{value}{suffix}")?;
-    }
+    write!(
+        output,
+        "{}{}{suffix}",
+        styled(label, DIM, color),
+        styled(
+            &value,
+            value_style.unwrap_or_default(),
+            color && value_style.is_some()
+        ),
+    )?;
     output.flush()
 }
 
@@ -189,17 +188,14 @@ fn color_enabled(is_terminal: bool) -> bool {
     is_terminal && std::env::var_os("NO_COLOR").is_none()
 }
 
-fn styled(value: &str, style: &str, color: bool) -> String {
-    if color {
-        format!("{style}{value}{RESET}")
-    } else {
-        value.to_owned()
-    }
-}
-
-fn styled_count_with_label(value: usize, label: &str, nonzero_style: &str, color: bool) -> String {
+fn styled_count_with_label<'a>(
+    value: usize,
+    label: &str,
+    nonzero_style: &'a str,
+    color: bool,
+) -> Styled<'a, String> {
     styled(
-        &format!("{value} {label}"),
+        format!("{value} {label}"),
         if value == 0 { DIM } else { nonzero_style },
         color,
     )
@@ -229,8 +225,11 @@ mod tests {
 
     #[test]
     fn styling_can_be_disabled() {
-        assert_eq!(styled("stale", RED, false), "stale");
-        assert_eq!(styled("stale", RED, true), "\x1b[31mstale\x1b[0m");
+        assert_eq!(styled("stale", RED, false).to_string(), "stale");
+        assert_eq!(
+            styled("stale", RED, true).to_string(),
+            "\x1b[31mstale\x1b[0m"
+        );
     }
 
     #[test]
