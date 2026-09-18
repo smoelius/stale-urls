@@ -119,7 +119,7 @@ pub fn scan_with_counted(
     let mut found: BTreeMap<SourceUrl, Vec<Occurrence>> = BTreeMap::new();
     let mut errors = Vec::new();
 
-    let output = git_output(root, ["ls-files", "-z"])?;
+    let output = git_output_unchecked(root, ["ls-files", "-z"])?;
     if !output.status.success() {
         return Err(git_failure("list tracked files", &output));
     }
@@ -721,13 +721,13 @@ impl Repository {
     }
 
     fn object_exists(&self, object: &str) -> Result<bool> {
-        let status = git_output(&self.path, ["cat-file", "-e", object])?.status;
+        let status = git_output_unchecked(&self.path, ["cat-file", "-e", object])?.status;
         Ok(status.success())
     }
 
     fn blob(&self, commit: &str, path: &str) -> Result<Option<Vec<u8>>> {
         let spec = format!("{commit}:{path}");
-        let output = git_output(&self.path, ["show", &spec])?;
+        let output = git_output_unchecked(&self.path, ["show", &spec])?;
         if output.status.success() {
             Ok(Some(output.stdout))
         } else {
@@ -742,7 +742,7 @@ impl Repository {
     }
 
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
-        let output = git_output(
+        let output = git_output_unchecked(
             &self.path,
             ["merge-base", "--is-ancestor", ancestor, descendant],
         )?;
@@ -780,7 +780,8 @@ impl Repository {
     }
 
     fn renamed_path(&self, old: &str, new: &str, path: &str, forward: bool) -> Result<String> {
-        let output = git_output(&self.path, ["diff", "--name-status", "-z", "-M", old, new])?;
+        let output =
+            git_output_unchecked(&self.path, ["diff", "--name-status", "-z", "-M", old, new])?;
         if !output.status.success() {
             return Err(git_failure("detect file renames", &output));
         }
@@ -869,7 +870,7 @@ impl Repository {
 }
 
 fn remote_default_branch(repository: &Path) -> Result<String> {
-    let output = git_output(repository, ["ls-remote", "--symref", "origin", "HEAD"])?;
+    let output = git_output_unchecked(repository, ["ls-remote", "--symref", "origin", "HEAD"])?;
     if !output.status.success() {
         return Err(git_failure("determine remote default branch", &output));
     }
@@ -929,7 +930,7 @@ fn git_lines<const N: usize>(
 }
 
 fn git_text<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<String> {
-    let output = git_output(repository, args)?;
+    let output = git_output_unchecked(repository, args)?;
     if !output.status.success() {
         return Err(git_failure(operation, &output));
     }
@@ -937,7 +938,7 @@ fn git_text<const N: usize>(repository: &Path, args: [&str; N], operation: &str)
 }
 
 fn git_ok<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<()> {
-    let output = git_output(repository, args)?;
+    let output = git_output_unchecked(repository, args)?;
     if output.status.success() {
         Ok(())
     } else {
@@ -945,7 +946,7 @@ fn git_ok<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -
     }
 }
 
-fn git_output<I, S>(repository: &Path, args: I) -> Result<Output>
+fn git_output_unchecked<I, S>(repository: &Path, args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
