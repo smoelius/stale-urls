@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use stale_urls::{
-    BOLD_RED, CYAN, CheckOutcome, CheckProgress, DIM, FoundUrl, GREEN, RED, RESET, ScanResult,
-    check_urls_with_phases, scan, scan_with_counted,
+    BOLD_RED, CYAN, CheckOutcome, CheckProgress, DIM, FoundUrl, GREEN, RED, ScanResult, Styled,
+    check_urls_with_phases, scan_with_counted, styled,
 };
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
@@ -76,71 +76,92 @@ fn main() -> Result<ExitCode> {
 }
 
 fn scan_current_repository() -> Result<ScanResult> {
-    let mut stderr_lock = io::stderr().lock();
-    if !stderr_lock.is_terminal() {
-        return scan(".").context("could not scan the current repository");
-    }
-
-    let color = color_enabled(true);
+    let mut display = ProgressDisplay::new(io::stderr().lock());
     let result = scan_with_counted(".", |path, index, total| {
-        let path_text = path.to_string_lossy();
-        let path_text: String = path_text.chars().flat_map(char::escape_debug).collect();
-        let suffix = format!(" ({index}/{total})");
-        let _ = write_progress(
-            &mut stderr_lock,
-            "Scanning: ",
-            &path_text,
-            &suffix,
-            None,
-            color,
-        );
+        let _ = display.update("Scanning: ", &path.to_string_lossy(), index, total, None);
     });
-    clear_progress(&mut stderr_lock)?;
+    display.clear()?;
     result.context("could not scan the current repository")
 }
 
 fn check_urls_with_progress(urls: Vec<FoundUrl>) -> Result<Vec<CheckOutcome>> {
-    let mut stderr_lock = io::stderr().lock();
-    let interactive = stderr_lock.is_terminal();
-    let color = color_enabled(interactive);
+    let mut display = ProgressDisplay::new(io::stderr().lock());
     let outcomes = check_urls_with_phases(urls, |progress| {
         let (label, value, index, total, value_style) = match progress {
             CheckProgress::Preparing {
                 repository,
                 index,
                 total,
-            } => ("Preparing: ", repository.to_owned(), index, total, None),
-            CheckProgress::Checking { url, index, total } => (
-                "Checking: ",
-                url.text.chars().flat_map(char::escape_debug).collect(),
-                index,
-                total,
-                Some(CYAN),
-            ),
+            } => ("Preparing: ", repository, index, total, None),
+            CheckProgress::Checking { url, index, total } => {
+                ("Checking: ", url.text.as_str(), index, total, Some(CYAN))
+            }
             CheckProgress::InvestigationCount { total } => {
-                if interactive {
-                    let _ = clear_progress(&mut stderr_lock);
-                }
+                let _ = display.clear();
                 println!("{total} URL(s) require investigation.");
                 return;
             }
             CheckProgress::Investigating { url, index, total } => (
                 "Investigating: ",
-                url.text.chars().flat_map(char::escape_debug).collect(),
+                url.text.as_str(),
                 index,
                 total,
                 Some(CYAN),
             ),
         };
-        let suffix = format!(" ({index}/{total})");
-        if interactive {
-            let _ = write_progress(&mut stderr_lock, label, &value, &suffix, value_style, color);
-        }
+        let _ = display.update(label, value, index, total, value_style);
     });
-    if interactive {
-        clear_progress(&mut stderr_lock)?;
-    }
+    display.clear()?;
     Ok(outcomes)
+}
+
+struct ProgressDisplay<W> {
+    output: W,
+    interactive: bool,
+    color: bool,
+}
+
+impl<W: Write + IsTerminal> ProgressDisplay<W> {
+    fn new(output: W) -> Self {
+        let interactive = output.is_terminal();
+        Self {
+            output,
+            interactive,
+            color: color_enabled(interactive),
+        }
+    }
+}
+
+impl<W: Write> ProgressDisplay<W> {
+    fn update(
+        &mut self,
+        label: &str,
+        value: &str,
+        index: usize,
+        total: usize,
+        value_style: Option<&str>,
+    ) -> io::Result<()> {
+        if !self.interactive {
+            return Ok(());
+        }
+        let value: String = value.chars().flat_map(char::escape_debug).collect();
+        let suffix = format!(" ({index}/{total})");
+        write_progress(
+            &mut self.output,
+            label,
+            &value,
+            &suffix,
+            value_style,
+            self.color,
+        )
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        if self.interactive {
+            clear_progress(&mut self.output)?;
+        }
+        Ok(())
+    }
 }
 
 fn write_progress(
@@ -154,17 +175,16 @@ fn write_progress(
     let available = terminal_width().saturating_sub(label.len() + suffix.chars().count() + 1);
     let value = truncate(value, available);
     write!(output, "\r\x1b[2K")?;
-    if color {
-        write!(output, "{DIM}{label}{RESET}")?;
-        if let Some(style) = value_style {
-            write!(output, "{style}{value}{RESET}")?;
-        } else {
-            write!(output, "{value}")?;
-        }
-        write!(output, "{suffix}")?;
-    } else {
-        write!(output, "{label}{value}{suffix}")?;
-    }
+    write!(
+        output,
+        "{}{}{suffix}",
+        styled(label, DIM, color),
+        styled(
+            &value,
+            value_style.unwrap_or_default(),
+            color && value_style.is_some()
+        ),
+    )?;
     output.flush()
 }
 
@@ -189,17 +209,14 @@ fn color_enabled(is_terminal: bool) -> bool {
     is_terminal && std::env::var_os("NO_COLOR").is_none()
 }
 
-fn styled(value: &str, style: &str, color: bool) -> String {
-    if color {
-        format!("{style}{value}{RESET}")
-    } else {
-        value.to_owned()
-    }
-}
-
-fn styled_count_with_label(value: usize, label: &str, nonzero_style: &str, color: bool) -> String {
+fn styled_count_with_label<'a>(
+    value: usize,
+    label: &str,
+    nonzero_style: &'a str,
+    color: bool,
+) -> Styled<'a, String> {
     styled(
-        &format!("{value} {label}"),
+        format!("{value} {label}"),
         if value == 0 { DIM } else { nonzero_style },
         color,
     )
@@ -222,6 +239,30 @@ mod tests {
     use super::{RED, styled, truncate, write_progress};
 
     #[test]
+    fn progress_display_suppresses_redirected_output() {
+        let mut display = super::ProgressDisplay {
+            output: Vec::new(),
+            interactive: false,
+            color: true,
+        };
+        display.update("Scanning: ", "file.rs", 1, 2, None).unwrap();
+        display.clear().unwrap();
+        assert!(display.output.is_empty());
+    }
+
+    #[test]
+    fn progress_display_escapes_values_and_clears() {
+        let mut display = super::ProgressDisplay {
+            output: Vec::new(),
+            interactive: true,
+            color: false,
+        };
+        display.update("Scanning: ", "a\nb", 1, 2, None).unwrap();
+        display.clear().unwrap();
+        assert_eq!(display.output, b"\r\x1b[2KScanning: a\\nb (1/2)\r\x1b[2K");
+    }
+
+    #[test]
     fn truncates_the_end_to_preserve_the_start_of_the_path() {
         assert_eq!(truncate("a/long/path/file.rs", 12), "a/long/pa...");
         assert_eq!(truncate("short.rs", 12), "short.rs");
@@ -229,8 +270,11 @@ mod tests {
 
     #[test]
     fn styling_can_be_disabled() {
-        assert_eq!(styled("stale", RED, false), "stale");
-        assert_eq!(styled("stale", RED, true), "\x1b[31mstale\x1b[0m");
+        assert_eq!(styled("stale", RED, false).to_string(), "stale");
+        assert_eq!(
+            styled("stale", RED, true).to_string(),
+            "\x1b[31mstale\x1b[0m"
+        );
     }
 
     #[test]

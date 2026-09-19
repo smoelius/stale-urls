@@ -20,6 +20,37 @@ pub const BOLD_YELLOW: &str = "\x1b[1;33m";
 pub const BOLD_MAGENTA: &str = "\x1b[1;35m";
 pub const CYAN: &str = "\x1b[36m";
 
+/// A value with optional ANSI styling.
+pub struct Styled<'a, T> {
+    value: T,
+    style: &'a str,
+    color: bool,
+}
+
+/// Apply an ANSI style when color is enabled.
+pub fn styled<T: fmt::Display>(value: T, style: &str, color: bool) -> Styled<'_, T> {
+    Styled {
+        value,
+        style,
+        color,
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for Styled<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            value,
+            style,
+            color,
+        } = self;
+        if *color {
+            write!(f, "{style}{value}{RESET}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
 static URL_CANDIDATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"https://github\.com/[^\s<>"'`]+"#).expect("URL candidate regex must compile")
 });
@@ -88,10 +119,10 @@ pub fn scan_with_counted(
     let mut found: BTreeMap<SourceUrl, Vec<Occurrence>> = BTreeMap::new();
     let mut errors = Vec::new();
 
-    let output = git_output(root, ["ls-files", "-z"])?;
-    if !output.status.success() {
-        return Err(git_failure("list tracked files", &output));
-    }
+    let output = git_output(
+        git_output_unchecked(root, ["ls-files", "-z"])?,
+        "list tracked files",
+    )?;
 
     let paths: Vec<PathBuf> = output
         .stdout
@@ -293,11 +324,7 @@ fn write_styled(
     style: &str,
     value: fmt::Arguments<'_>,
 ) -> fmt::Result {
-    if color {
-        write!(f, "{style}{value}{RESET}")
-    } else {
-        f.write_fmt(value)
-    }
+    write!(f, "{}", styled(value, style, color))
 }
 
 fn write_field(f: &mut fmt::Formatter<'_>, label: &str, color: bool) -> fmt::Result {
@@ -694,13 +721,13 @@ impl Repository {
     }
 
     fn object_exists(&self, object: &str) -> Result<bool> {
-        let status = git_output(&self.path, ["cat-file", "-e", object])?.status;
+        let status = git_output_unchecked(&self.path, ["cat-file", "-e", object])?.status;
         Ok(status.success())
     }
 
     fn blob(&self, commit: &str, path: &str) -> Result<Option<Vec<u8>>> {
         let spec = format!("{commit}:{path}");
-        let output = git_output(&self.path, ["show", &spec])?;
+        let output = git_output_unchecked(&self.path, ["show", &spec])?;
         if output.status.success() {
             Ok(Some(output.stdout))
         } else {
@@ -715,7 +742,7 @@ impl Repository {
     }
 
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
-        let output = git_output(
+        let output = git_output_unchecked(
             &self.path,
             ["merge-base", "--is-ancestor", ancestor, descendant],
         )?;
@@ -753,10 +780,10 @@ impl Repository {
     }
 
     fn renamed_path(&self, old: &str, new: &str, path: &str, forward: bool) -> Result<String> {
-        let output = git_output(&self.path, ["diff", "--name-status", "-z", "-M", old, new])?;
-        if !output.status.success() {
-            return Err(git_failure("detect file renames", &output));
-        }
+        let output = git_output(
+            git_output_unchecked(&self.path, ["diff", "--name-status", "-z", "-M", old, new])?,
+            "detect file renames",
+        )?;
         let fields: Vec<&[u8]> = output.stdout.split(|byte| *byte == 0).collect();
         let mut index = 0;
         while index < fields.len() && !fields[index].is_empty() {
@@ -842,11 +869,11 @@ impl Repository {
 }
 
 fn remote_default_branch(repository: &Path) -> Result<String> {
-    let output = git_output(repository, ["ls-remote", "--symref", "origin", "HEAD"])?;
-    if !output.status.success() {
-        return Err(git_failure("determine remote default branch", &output));
-    }
-    let text = String::from_utf8(output.stdout).context("Git emitted non-UTF-8 output")?;
+    let text = git_text(
+        repository,
+        ["ls-remote", "--symref", "origin", "HEAD"],
+        "determine remote default branch",
+    )?;
     text.lines()
         .find_map(|line| {
             line.strip_prefix("ref: refs/heads/")
@@ -902,23 +929,16 @@ fn git_lines<const N: usize>(
 }
 
 fn git_text<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<String> {
-    let output = git_output(repository, args)?;
-    if !output.status.success() {
-        return Err(git_failure(operation, &output));
-    }
+    let output = git_output(git_output_unchecked(repository, args)?, operation)?;
     String::from_utf8(output.stdout).context("Git emitted non-UTF-8 output")
 }
 
 fn git_ok<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<()> {
-    let output = git_output(repository, args)?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(git_failure(operation, &output))
-    }
+    git_output(git_output_unchecked(repository, args)?, operation)?;
+    Ok(())
 }
 
-fn git_output<I, S>(repository: &Path, args: I) -> Result<Output>
+fn git_output_unchecked<I, S>(repository: &Path, args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -935,8 +955,13 @@ fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
     let output = command
         .output()
         .with_context(|| format!("could not {operation}"))?;
+    git_output(output, operation)?;
+    Ok(())
+}
+
+fn git_output(output: Output, operation: &str) -> Result<Output> {
     if output.status.success() {
-        Ok(())
+        Ok(output)
     } else {
         Err(git_failure(operation, &output))
     }
