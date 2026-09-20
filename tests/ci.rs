@@ -26,6 +26,13 @@ fn dylint() {
 }
 
 #[test]
+fn fmt() {
+    let mut command = Command::new("cargo");
+    command.args(["+nightly", "fmt", "--check"]);
+    command.assert().success();
+}
+
+#[test]
 fn markdown_link_check() {
     let tempdir = tempdir().unwrap();
 
