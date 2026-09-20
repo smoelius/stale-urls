@@ -62,7 +62,7 @@ jobs:
 
       - name: Install tools
         run: |
-          rustup component add clippy --toolchain nightly
+          rustup component add clippy rustfmt --toolchain nightly
           cargo install cargo-dylint dylint-link || true
 
       - name: Build
