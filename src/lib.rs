@@ -1,3 +1,7 @@
+//! This library is for internal use by [`stale-urls`]. Stability of its APIs is not guaranteed.
+//!
+//! [`stale-urls`]: https://github.com/smoelius/stale-urls
+
 use anyhow::{Context, Error, Result, anyhow, bail};
 use percent_encoding::percent_decode_str;
 use regex::Regex;
@@ -566,7 +570,10 @@ fn check_local(repository: &Repository, found: &FoundUrl) -> Result<Option<Vec<V
     let referenced = repository
         .blob(&found.url.commit, &found.url.path)?
         .ok_or_else(|| anyhow!("{} does not exist at the referenced commit", found.url.path))?;
-    let expected = extract_lines(&referenced, found.url.start, found.url.end)?;
+    let expected: Vec<Vec<u8>> = extract_lines(&referenced, found.url.start, found.url.end)?
+        .into_iter()
+        .map(<[u8]>::to_vec)
+        .collect();
 
     if repository.contains_at(&repository.default_ref, &found.url.path, &expected)? {
         return Ok(None);
@@ -883,18 +890,33 @@ fn remote_default_branch(repository: &Path) -> Result<String> {
         .ok_or_else(|| anyhow!("origin did not advertise a default branch"))
 }
 
-fn extract_lines(blob: &[u8], start: usize, end: usize) -> Result<Vec<Vec<u8>>> {
-    let lines = lines(blob);
-    if start == 0 || end < start || end > lines.len() {
-        bail!(
-            "referenced range L{start}-L{end} is outside a file containing {} line(s)",
-            lines.len()
-        );
+/// Borrow a 1-based, inclusive line range, scanning only as far as needed.
+/// Returns an error for zero, reversed, or out-of-bounds ranges.
+/// A trailing LF does not create an extra empty line.
+/// LF separates lines; CR and all other bytes remain significant.
+pub fn extract_lines(blob: &[u8], start: usize, end: usize) -> Result<Vec<&[u8]>> {
+    if start == 0 || end < start {
+        bail!("invalid line range L{start}-L{end}");
     }
-    Ok(lines[start - 1..end]
-        .iter()
-        .map(|line| line.to_vec())
-        .collect())
+    let mut selected = Vec::new();
+    let mut count = 0;
+    // Strip one final separator, which does not create an extra empty line.
+    if !blob.is_empty() {
+        for line in blob
+            .strip_suffix(b"\n")
+            .unwrap_or(blob)
+            .split(|byte| *byte == b'\n')
+        {
+            count += 1;
+            if count >= start {
+                selected.push(line);
+            }
+            if count == end {
+                return Ok(selected);
+            }
+        }
+    }
+    bail!("referenced range L{start}-L{end} is outside a file containing {count} line(s)")
 }
 
 fn contains_lines(blob: &[u8], expected: &[Vec<u8>]) -> bool {
@@ -928,17 +950,29 @@ fn git_lines<const N: usize>(
         .collect())
 }
 
-fn git_text<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<String> {
+/// Run Git, requiring success and UTF-8 stdout. Output is not trimmed.
+pub fn git_text<I, S>(repository: &Path, args: I, operation: &str) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let output = git_output(git_output_unchecked(repository, args)?, operation)?;
     String::from_utf8(output.stdout).context("Git emitted non-UTF-8 output")
 }
 
-fn git_ok<const N: usize>(repository: &Path, args: [&str; N], operation: &str) -> Result<()> {
+/// Run Git, requiring a successful exit status and discarding its output.
+pub fn git_ok<I, S>(repository: &Path, args: I, operation: &str) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     git_output(git_output_unchecked(repository, args)?, operation)?;
     Ok(())
 }
 
-fn git_output_unchecked<I, S>(repository: &Path, args: I) -> Result<Output>
+/// Run Git in `repository`, capturing output without checking its exit status.
+/// Returns an error if the command cannot be started.
+pub fn git_output_unchecked<I, S>(repository: &Path, args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -959,7 +993,8 @@ fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
     Ok(())
 }
 
-fn git_output(output: Output, operation: &str) -> Result<Output> {
+/// Require successful Git output, reporting the operation, exit status, and stderr on failure.
+pub fn git_output(output: Output, operation: &str) -> Result<Output> {
     if output.status.success() {
         Ok(output)
     } else {
@@ -968,7 +1003,7 @@ fn git_output(output: Output, operation: &str) -> Result<Output> {
 }
 
 fn git_failure(operation: &str, output: &Output) -> Error {
-    let mut message = format!("could not {operation}");
+    let mut message = format!("could not {operation} ({})", output.status);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.trim();
     if !stderr.is_empty() {
@@ -1043,7 +1078,11 @@ mod tests {
 
     #[test]
     fn matches_exact_whole_contiguous_lines() {
-        let expected = extract_lines(b"beta\n  gamma\n", 1, 2).unwrap();
+        let expected: Vec<Vec<u8>> = extract_lines(b"beta\n  gamma\n", 1, 2)
+            .unwrap()
+            .into_iter()
+            .map(<[u8]>::to_vec)
+            .collect();
         assert!(contains_lines(b"alpha\nbeta\n  gamma\ndelta\n", &expected));
         assert!(!contains_lines(
             b"alpha\nx beta\n  gamma\ndelta\n",
@@ -1419,5 +1458,46 @@ mod tests {
         assert!(colored.contains("README.md:3"));
         assert!(colored.contains(&format!("\x1b[0m{}", "1".repeat(SHA1_HEX_LENGTH))));
         assert!(!colored.contains(&format!("\x1b[36m{}", "1".repeat(SHA1_HEX_LENGTH))));
+    }
+
+    #[test]
+    fn borrows_exact_lines_and_handles_separators() {
+        let blob = b"before\n\xff\r\n\nlast\n";
+        let selected = extract_lines(blob, 2, 4).unwrap();
+        assert_eq!(selected, [b"\xff\r".as_slice(), b"", b"last"]);
+        assert_eq!(selected[0].as_ptr(), blob[7..].as_ptr());
+        assert_eq!(
+            extract_lines(b"one", 1, 1).unwrap(),
+            extract_lines(b"one\n", 1, 1).unwrap()
+        );
+        assert_eq!(extract_lines(b"\n", 1, 1).unwrap(), [b"".as_slice()]);
+        for (blob, start, end) in [
+            (b"".as_slice(), 1, 1),
+            (b"one\n", 2, 2),
+            (b"one", 0, 1),
+            (b"one", 2, 1),
+        ] {
+            assert!(extract_lines(blob, start, end).is_err());
+        }
+    }
+
+    #[test]
+    fn git_helpers_accept_os_string_iterators_and_report_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = vec![OsString::from("--version")];
+        assert!(
+            git_text(dir.path(), &args, "read Git version")
+                .unwrap()
+                .starts_with("git version")
+        );
+        git_ok(dir.path(), args, "read Git version").unwrap();
+        let output =
+            git_output_unchecked(dir.path(), ["stale-urls-nonexistent-subcommand"]).unwrap();
+        let status = output.status.to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let error = git_output(output, "test failure").unwrap_err().to_string();
+        assert!(error.contains("could not test failure"));
+        assert!(error.contains(&status));
+        assert!(error.contains(&stderr));
     }
 }
