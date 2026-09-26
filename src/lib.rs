@@ -628,18 +628,27 @@ impl Repository {
         fs::create_dir_all(&owner_directory)
             .with_context(|| format!("could not create {}", owner_directory.display()))?;
 
+        let remote = format!("https://github.com/{}/{}.git", url.owner, url.repo);
+        Self::open_or_update_at(path_buf, &remote)
+    }
+
+    fn open_or_update_at(mut path_buf: PathBuf, remote: &str) -> Result<Self> {
         if path_buf.exists() {
-            if !path_buf.join(".git").is_dir() {
+            // Older caches have a working tree. Use their Git directory directly,
+            // leaving any checked-out files untouched.
+            if path_buf.join(".git").is_dir() {
+                path_buf = path_buf.join(".git");
+            }
+            if !path_buf.join("HEAD").is_file() || !path_buf.join("objects").is_dir() {
                 bail!("cache path {} is not a Git repository", path_buf.display());
             }
         } else {
-            let remote = format!("https://github.com/{}/{}.git", url.owner, url.repo);
             command_ok(
                 Command::new("git")
-                    .args(["clone", "--depth", "1", "--no-tags", "--quiet"])
-                    .arg(&remote)
+                    .args(["clone", "--bare", "--depth", "1", "--no-tags", "--quiet"])
+                    .arg(remote)
                     .arg(&path_buf),
-                "shallow-clone repository",
+                "shallow-clone bare repository",
             )?;
         }
 
@@ -656,21 +665,6 @@ impl Repository {
             ],
             "update cached default branch",
         )?;
-
-        let current_branch = git_text(&path_buf, ["branch", "--show-current"], "read branch")?;
-        if current_branch.trim() == default_branch {
-            git_ok(
-                &path_buf,
-                ["merge", "--quiet", "--ff-only", &default_ref],
-                "fast-forward cached default branch",
-            )?;
-        } else {
-            git_ok(
-                &path_buf,
-                ["checkout", "--quiet", "-B", &default_branch, &default_ref],
-                "check out the repository's default branch",
-            )?;
-        }
 
         Ok(Self {
             path: path_buf,
@@ -1288,6 +1282,91 @@ mod tests {
     }
 
     #[test]
+    fn bare_cache_tracks_updates_and_deepens_history() {
+        let (remote_directory, _) = test_repository();
+        let first = commit_file(remote_directory.path(), "file.txt", "one\n", "one");
+        commit_file(remote_directory.path(), "file.txt", "two\n", "two");
+        let cache = tempfile::tempdir().unwrap();
+        let cache_path = cache.path().join("repository");
+        let remote = format!("file://{}", remote_directory.path().display());
+        let repository = Repository::open_or_update_at(cache_path.clone(), &remote).unwrap();
+        assert_eq!(
+            test_git(&cache_path, &["rev-parse", "--is-bare-repository"]),
+            "true"
+        );
+        assert!(!cache_path.join("file.txt").exists());
+        assert!(!cache_path.join(".git").exists());
+        assert_eq!(
+            test_git(&cache_path, &["rev-parse", "--is-shallow-repository"]),
+            "true"
+        );
+        repository.ensure_full_default_history().unwrap();
+        assert!(repository.object_exists(&first).unwrap());
+        assert_eq!(
+            test_git(&cache_path, &["rev-parse", "--is-shallow-repository"]),
+            "false"
+        );
+
+        let third = commit_file(remote_directory.path(), "file.txt", "three\n", "three");
+        let repository = Repository::open_or_update_at(cache_path.clone(), &remote).unwrap();
+        assert_eq!(
+            test_git(&cache_path, &["rev-parse", &repository.default_ref]),
+            third
+        );
+
+        // A rewind must not require a fast-forward merge into a local branch.
+        test_git(remote_directory.path(), &["reset", "--hard", &first]);
+        let repository = Repository::open_or_update_at(cache_path.clone(), &remote).unwrap();
+        assert_eq!(
+            test_git(&cache_path, &["rev-parse", &repository.default_ref]),
+            first
+        );
+
+        test_git(remote_directory.path(), &["branch", "-m", "replacement"]);
+        let repository = Repository::open_or_update_at(cache_path.clone(), &remote).unwrap();
+        assert_eq!(repository.default_branch, "replacement");
+        assert_eq!(
+            test_git(&cache_path, &["rev-parse", &repository.default_ref]),
+            first
+        );
+    }
+
+    // Each filesystem mutation is confined to this test's temporary directory.
+    #[cfg_attr(dylint_lib = "general", allow(non_thread_safe_call_in_test))]
+    #[test]
+    fn legacy_cache_updates_without_touching_working_tree() {
+        let (remote_directory, _) = test_repository();
+        commit_file(remote_directory.path(), "file.txt", "one\n", "one");
+        let cache = tempfile::tempdir().unwrap();
+        let cache_path = cache.path().join("repository");
+        test_git(
+            cache.path(),
+            &[
+                "clone",
+                "--quiet",
+                remote_directory.path().to_str().unwrap(),
+                "repository",
+            ],
+        );
+        fs::write(cache_path.join("file.txt"), "local edits\n").unwrap();
+        let second = commit_file(remote_directory.path(), "file.txt", "two\n", "two");
+        let repository = Repository::open_or_update_at(
+            cache_path.clone(),
+            remote_directory.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repository.path, cache_path.join(".git"));
+        assert_eq!(
+            test_git(&repository.path, &["rev-parse", &repository.default_ref]),
+            second
+        );
+        assert_eq!(
+            fs::read(cache_path.join("file.txt")).unwrap(),
+            b"local edits\n"
+        );
+    }
+
+    #[test]
     fn preparation_fetches_multiple_missing_commits_together() {
         let (temporary, _) = test_repository();
         let first = commit_file(temporary.path(), "file.txt", "one\n", "one");
@@ -1298,7 +1377,7 @@ mod tests {
         let clone_path = clone_directory.path().join("clone");
         let remote = format!("file://{}", temporary.path().display());
         let output = Command::new("git")
-            .args(["clone", "--quiet", "--depth", "1"])
+            .args(["clone", "--bare", "--quiet", "--depth", "1"])
             .arg(remote)
             .arg(&clone_path)
             .output()
