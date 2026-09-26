@@ -47,11 +47,13 @@ in place instead of scrolling the terminal.
 
 2. **Preparing** — `Preparing: OWNER/REPOSITORY (i/n)`
 
-   Groups URLs by repository. Each required repository is shallow-cloned or
-   fast-forwarded in the user cache (`$XDG_CACHE_HOME/stale-urls`, normally
-   `~/.cache/stale-urls`), and its missing pinned commits are fetched in a
+   Groups URLs by repository. Each required repository is shallow-cloned as a bare
+   repository or updated by fetching its default branch in the user cache
+   (`$XDG_CACHE_HOME/stale-urls/v1`, normally
+   `~/.cache/stale-urls/v1`), and its missing pinned commits are fetched in a
    batch, with individual retries if the batch fails. Network access can occur
-   during this phase.
+   during this phase. Older, unversioned caches are left untouched and are no
+   longer used.
 
 3. **Checking** — `Checking: URL (i/n)`
 
