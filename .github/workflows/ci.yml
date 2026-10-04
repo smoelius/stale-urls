@@ -64,12 +64,13 @@ jobs:
         run: |
           rustup component add clippy rustfmt --toolchain nightly
           cargo install cargo-dylint dylint-link || true
+          cargo install unset                    || true
 
       - name: Build
         run: cargo test --no-run
 
       - name: Test
-        run: cargo test -- --nocapture
+        run: cargo test --config "target.'cfg(all())'.runner = 'unset'" -- --nocapture
 
   all-checks:
     needs: [test]
