@@ -9,9 +9,10 @@ use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
     fmt::{self, Write as _},
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
+    str,
     sync::LazyLock,
 };
 
@@ -150,7 +151,7 @@ pub fn scan_with_counted(
                 continue;
             }
         };
-        let Ok(contents) = std::str::from_utf8(&bytes) else {
+        let Ok(contents) = str::from_utf8(&bytes) else {
             continue;
         };
 
@@ -179,7 +180,7 @@ pub fn scan_with_counted(
     })
 }
 
-fn read_tracked_path(path: &Path) -> std::io::Result<Vec<u8>> {
+fn read_tracked_path(path: &Path) -> io::Result<Vec<u8>> {
     if !fs::symlink_metadata(path)?.file_type().is_symlink() {
         return fs::read(path);
     }
@@ -198,8 +199,8 @@ fn read_tracked_path(path: &Path) -> std::io::Result<Vec<u8>> {
             .into_string()
             .map(String::into_bytes)
             .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
                     "symlink target is not valid UTF-8",
                 )
             })

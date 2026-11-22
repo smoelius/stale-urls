@@ -3,6 +3,7 @@ use stale_urls::{
     BOLD_RED, CYAN, CheckOutcome, CheckProgress, DIM, FoundUrl, GREEN, RED, ScanResult, Styled,
     check_urls_with_phases, scan_with_counted, styled,
 };
+use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use terminal_size::{Width, terminal_size_of};
@@ -198,7 +199,7 @@ fn terminal_width() -> usize {
         .map(|(Width(width), _)| usize::from(width))
         .filter(|width| *width != 0)
         .or_else(|| {
-            std::env::var("COLUMNS")
+            env::var("COLUMNS")
                 .ok()
                 .and_then(|value| value.parse().ok())
         })
@@ -206,7 +207,7 @@ fn terminal_width() -> usize {
 }
 
 fn color_enabled(is_terminal: bool) -> bool {
-    is_terminal && std::env::var_os("NO_COLOR").is_none()
+    is_terminal && env::var_os("NO_COLOR").is_none()
 }
 
 fn styled_count_with_label<'a>(
